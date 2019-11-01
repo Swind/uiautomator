@@ -5,15 +5,23 @@
 
 import sys
 import os
-import subprocess
 import time
 import itertools
-import json
-import hashlib
 import socket
-import re
 import collections
 import xml.dom.minidom
+import threading
+
+try:
+    import urllib2
+except ImportError:
+    import urllib.request as urllib2
+
+from ppadb.client import Client as AdbClient
+
+from uiautomator.rpc.json_rpc import jsonrpc_wrap, JsonRPCClient, JsonRPCError
+from uiautomator.selector import Selector
+
 
 DEVICE_PORT = int(os.environ.get('UIAUTOMATOR_DEVICE_PORT', '9008'))
 LOCAL_PORT = int(os.environ.get('UIAUTOMATOR_LOCAL_PORT', '9008'))
@@ -21,29 +29,8 @@ LOCAL_PORT = int(os.environ.get('UIAUTOMATOR_LOCAL_PORT', '9008'))
 if 'localhost' not in os.environ.get('no_proxy', ''):
     os.environ['no_proxy'] = "localhost,%s" % os.environ.get('no_proxy', '')
 
-try:
-    import urllib2
-except ImportError:
-    import urllib.request as urllib2
-try:
-    from httplib import HTTPException
-except:
-    from http.client import HTTPException
-try:
-    if os.name == 'nt':
-        import urllib3
-except:  # to fix python setup error on Windows.
-    pass
-
 __author__ = "Xiaocong He"
 __all__ = ["device", "Device", "rect", "point", "Selector", "JsonRPCError"]
-
-
-def U(x):
-    if sys.version_info.major == 2:
-        return x.decode('utf-8') if type(x) is str else x
-    elif sys.version_info.major == 3:
-        return x
 
 
 def param_to_property(*props, **kwprops):
@@ -78,153 +65,6 @@ def param_to_property(*props, **kwprops):
     return Wrapper
 
 
-class JsonRPCError(Exception):
-
-    def __init__(self, code, message):
-        self.code = int(code)
-        self.message = message
-
-    def __str__(self):
-        return "JsonRPC Error code: %d, Message: %s" % (self.code, self.message)
-
-
-class JsonRPCMethod(object):
-
-    if os.name == 'nt':
-        try:
-            pool = urllib3.PoolManager()
-        except:
-            pass
-
-    def __init__(self, url, method, timeout=30):
-        self.url, self.method, self.timeout = url, method, timeout
-
-    def __call__(self, *args, **kwargs):
-        if args and kwargs:
-            raise SyntaxError("Could not accept both *args and **kwargs as JSONRPC parameters.")
-        data = {"jsonrpc": "2.0", "method": self.method, "id": self.id()}
-        if args:
-            data["params"] = args
-        elif kwargs:
-            data["params"] = kwargs
-        jsonresult = {"result": ""}
-        if os.name == "nt":
-            res = self.pool.urlopen("POST",
-                                    self.url,
-                                    headers={"Content-Type": "application/json"},
-                                    body=json.dumps(data).encode("utf-8"),
-                                    timeout=self.timeout)
-            jsonresult = json.loads(res.data.decode("utf-8"))
-        else:
-            result = None
-            try:
-                req = urllib2.Request(self.url,
-                                      json.dumps(data).encode("utf-8"),
-                                      {"Content-type": "application/json"})
-                result = urllib2.urlopen(req, timeout=self.timeout)
-                jsonresult = json.loads(result.read().decode("utf-8"))
-            finally:
-                if result is not None:
-                    result.close()
-        if "error" in jsonresult and jsonresult["error"]:
-            raise JsonRPCError(
-                jsonresult["error"]["code"],
-                "%s: %s" % (jsonresult["error"]["data"]["exceptionTypeName"], jsonresult["error"]["message"])
-            )
-        return jsonresult["result"]
-
-    def id(self):
-        m = hashlib.md5()
-        m.update(("%s at %f" % (self.method, time.time())).encode("utf-8"))
-        return m.hexdigest()
-
-
-class JsonRPCClient(object):
-
-    def __init__(self, url, timeout=30, method_class=JsonRPCMethod):
-        self.url = url
-        self.timeout = timeout
-        self.method_class = method_class
-
-    def __getattr__(self, method):
-        return self.method_class(self.url, method, timeout=self.timeout)
-
-
-class Selector(dict):
-
-    """The class is to build parameters for UiSelector passed to Android device.
-    """
-    __fields = {
-        "text": (0x01, None),  # MASK_TEXT,
-        "textContains": (0x02, None),  # MASK_TEXTCONTAINS,
-        "textMatches": (0x04, None),  # MASK_TEXTMATCHES,
-        "textStartsWith": (0x08, None),  # MASK_TEXTSTARTSWITH,
-        "className": (0x10, None),  # MASK_CLASSNAME
-        "classNameMatches": (0x20, None),  # MASK_CLASSNAMEMATCHES
-        "description": (0x40, None),  # MASK_DESCRIPTION
-        "descriptionContains": (0x80, None),  # MASK_DESCRIPTIONCONTAINS
-        "descriptionMatches": (0x0100, None),  # MASK_DESCRIPTIONMATCHES
-        "descriptionStartsWith": (0x0200, None),  # MASK_DESCRIPTIONSTARTSWITH
-        "checkable": (0x0400, False),  # MASK_CHECKABLE
-        "checked": (0x0800, False),  # MASK_CHECKED
-        "clickable": (0x1000, False),  # MASK_CLICKABLE
-        "longClickable": (0x2000, False),  # MASK_LONGCLICKABLE,
-        "scrollable": (0x4000, False),  # MASK_SCROLLABLE,
-        "enabled": (0x8000, False),  # MASK_ENABLED,
-        "focusable": (0x010000, False),  # MASK_FOCUSABLE,
-        "focused": (0x020000, False),  # MASK_FOCUSED,
-        "selected": (0x040000, False),  # MASK_SELECTED,
-        "packageName": (0x080000, None),  # MASK_PACKAGENAME,
-        "packageNameMatches": (0x100000, None),  # MASK_PACKAGENAMEMATCHES,
-        "resourceId": (0x200000, None),  # MASK_RESOURCEID,
-        "resourceIdMatches": (0x400000, None),  # MASK_RESOURCEIDMATCHES,
-        "index": (0x800000, 0),  # MASK_INDEX,
-        "instance": (0x01000000, 0)  # MASK_INSTANCE,
-    }
-    __mask, __childOrSibling, __childOrSiblingSelector = "mask", "childOrSibling", "childOrSiblingSelector"
-
-    def __init__(self, **kwargs):
-        super(Selector, self).__setitem__(self.__mask, 0)
-        super(Selector, self).__setitem__(self.__childOrSibling, [])
-        super(Selector, self).__setitem__(self.__childOrSiblingSelector, [])
-        for k in kwargs:
-            self[k] = kwargs[k]
-
-    def __setitem__(self, k, v):
-        if k in self.__fields:
-            super(Selector, self).__setitem__(U(k), U(v))
-            super(Selector, self).__setitem__(self.__mask, self[self.__mask] | self.__fields[k][0])
-        else:
-            raise ReferenceError("%s is not allowed." % k)
-
-    def __delitem__(self, k):
-        if k in self.__fields:
-            super(Selector, self).__delitem__(k)
-            super(Selector, self).__setitem__(self.__mask, self[self.__mask] & ~self.__fields[k][0])
-
-    def clone(self):
-        kwargs = dict((k, self[k]) for k in self
-                      if k not in [self.__mask, self.__childOrSibling, self.__childOrSiblingSelector])
-        selector = Selector(**kwargs)
-        for v in self[self.__childOrSibling]:
-            selector[self.__childOrSibling].append(v)
-        for s in self[self.__childOrSiblingSelector]:
-            selector[self.__childOrSiblingSelector].append(s.clone())
-        return selector
-
-    def child(self, **kwargs):
-        self[self.__childOrSibling].append("child")
-        self[self.__childOrSiblingSelector].append(Selector(**kwargs))
-        return self
-
-    def sibling(self, **kwargs):
-        self[self.__childOrSibling].append("sibling")
-        self[self.__childOrSiblingSelector].append(Selector(**kwargs))
-        return self
-
-    child_selector, from_parent = child, sibling
-
-
 def rect(top=0, left=0, bottom=100, right=100):
     return {"top": top, "left": left, "bottom": bottom, "right": right}
 
@@ -240,94 +80,6 @@ def intersect(rect1, rect2):
 def point(x=0, y=0):
     return {"x": x, "y": y}
 
-
-class Adb(object):
-
-    def __init__(self, serial=None, adb_server_host=None, adb_server_port=None):
-        self.__adb_cmd = None
-        self.default_serial = serial if serial else os.environ.get("ANDROID_SERIAL", None)
-        self.adb_server_host = str(adb_server_host if adb_server_host else 'localhost')
-        self.adb_server_port = str(adb_server_port if adb_server_port else '5037')
-        self.adbHostPortOptions = []
-        if self.adb_server_host not in ['localhost', '127.0.0.1']:
-            self.adbHostPortOptions += ["-H", self.adb_server_host]
-        if self.adb_server_port != '5037':
-            self.adbHostPortOptions += ["-P", self.adb_server_port]
-
-    def adb(self):
-        if self.__adb_cmd is None:
-            if "ANDROID_HOME" in os.environ:
-                filename = "adb.exe" if os.name == 'nt' else "adb"
-                adb_cmd = os.path.join(os.environ["ANDROID_HOME"], "platform-tools", filename)
-                if not os.path.exists(adb_cmd):
-                    raise EnvironmentError(
-                        "Adb not found in $ANDROID_HOME path: %s." % os.environ["ANDROID_HOME"])
-            else:
-                import distutils
-                if "spawn" not in dir(distutils):
-                    import distutils.spawn
-                adb_cmd = distutils.spawn.find_executable("adb")
-                if adb_cmd:
-                    adb_cmd = os.path.realpath(adb_cmd)
-                else:
-                    raise EnvironmentError("$ANDROID_HOME environment not set.")
-            self.__adb_cmd = adb_cmd
-        return self.__adb_cmd
-
-    def cmd(self, *args, **kwargs):
-        '''adb command, add -s serial by default. return the subprocess.Popen object.'''
-        serial = self.device_serial()
-        if serial:
-            if " " in serial:  # TODO how to include special chars on command line
-                serial = "'%s'" % serial
-            return self.raw_cmd(*["-s", serial] + list(args))
-        else:
-            return self.raw_cmd(*args)
-
-    def raw_cmd(self, *args):
-        '''adb command. return the subprocess.Popen object.'''
-        cmd_line = [self.adb()] + self.adbHostPortOptions + list(args)
-        if os.name != "nt":
-            cmd_line = [" ".join(cmd_line)]
-        return subprocess.Popen(cmd_line, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    def device_serial(self):
-        if not self.default_serial:
-            devices = self.devices()
-            if devices:
-                if len(devices) is 1:
-                    self.default_serial = list(devices.keys())[0]
-                else:
-                    raise EnvironmentError("Multiple devices attached but default android serial not set.")
-            else:
-                raise EnvironmentError("Device not attached.")
-        return self.default_serial
-
-    def devices(self):
-        '''get a dict of attached devices. key is the device serial, value is device name.'''
-        out = self.raw_cmd("devices").communicate()[0].decode("utf-8")
-        match = "List of devices attached"
-        index = out.find(match)
-        if index < 0:
-            raise EnvironmentError("adb is not working.")
-        return dict([s.split("\t") for s in out[index + len(match):].strip().splitlines() if s.strip()])
-
-    def forward(self, local_port, device_port):
-        '''adb port forward. return 0 if success, else non-zero.'''
-        return self.cmd("forward", "tcp:%d" % local_port, "tcp:%d" % device_port).wait()
-
-    def forward_list(self):
-        '''adb forward --list'''
-        version = self.version()
-        if int(version[1]) <= 1 and int(version[2]) <= 0 and int(version[3]) < 31:
-            raise EnvironmentError("Low adb version.")
-        lines = self.raw_cmd("forward", "--list").communicate()[0].decode("utf-8").strip().splitlines()
-        return [line.strip().split() for line in lines]
-
-    def version(self):
-        '''adb version'''
-        match = re.search(r"(\d+)\.(\d+)\.(\d+)", self.raw_cmd("version").communicate()[0].decode("utf-8"))
-        return [match.group(i) for i in range(4)]
 
 
 _init_local_port = LOCAL_PORT - 1
@@ -357,7 +109,7 @@ class NotFoundHandler(object):
         self.__handlers = collections.defaultdict(lambda: {'on': True, 'handlers': []})
 
     def __get__(self, instance, type):
-        return self.__handlers[instance.adb.device_serial()]
+        return self.__handlers[instance.adb_device.serial]
 
 
 class AutomatorServer(object):
@@ -375,17 +127,22 @@ class AutomatorServer(object):
 
     handlers = NotFoundHandler()  # handler UI Not Found exception
 
-    def __init__(self, serial=None, local_port=None, device_port=None, adb_server_host=None, adb_server_port=None):
-        self.uiautomator_process = None
-        self.adb = Adb(serial=serial, adb_server_host=adb_server_host, adb_server_port=adb_server_port)
+    def __init__(self, serial, local_port=None, device_port=None, adb_server_host="127.0.0.1", adb_server_port=5037):
+        self.adb_client = AdbClient(host=adb_server_host, port=adb_server_port)
+        self.adb_device = self.adb_client.device(serial)
+
+        self._stop_server = False
+        self._message_handler_thread = None
+        self._uiautomator_connection = None
+
         self.device_port = int(device_port) if device_port else DEVICE_PORT
         if local_port:
             self.local_port = local_port
         else:
             try:  # first we will try to use the local port already adb forwarded
-                for s, lp, rp in self.adb.forward_list():
-                    if s == self.adb.device_serial() and rp == 'tcp:%d' % self.device_port:
-                        self.local_port = int(lp[4:])
+                for device_local_port, device_remote_port in self.adb_device.list_forward().items():
+                    if device_remote_port == 'tcp:{}'.format(self.device_port):
+                        self.local_port = int(device_local_port[4:])
                         break
                 else:
                     self.local_port = next_local_port(adb_server_host)
@@ -396,55 +153,17 @@ class AutomatorServer(object):
         base_dir = os.path.dirname(__file__)
         for jar, url in self.__jar_files.items():
             filename = os.path.join(base_dir, url)
-            self.adb.cmd("push", filename, "/data/local/tmp/").wait()
+            self.adb_device.push(filename, "/data/local/tmp/")
         return list(self.__jar_files.keys())
 
     def install(self):
         base_dir = os.path.dirname(__file__)
         for apk in self.__apk_files:
-            self.adb.cmd("install", "-r -t", os.path.join(base_dir, apk)).wait()
+            self.adb_device.install(os.path.join(base_dir, apk), reinstall=True, test=True)
 
     @property
     def jsonrpc(self):
-        return self.jsonrpc_wrap(timeout=int(os.environ.get("jsonrpc_timeout", 90)))
-
-    def jsonrpc_wrap(self, timeout):
-        server = self
-        ERROR_CODE_BASE = -32000
-
-        def _JsonRPCMethod(url, method, timeout, restart=True):
-            _method_obj = JsonRPCMethod(url, method, timeout)
-
-            def wrapper(*args, **kwargs):
-                URLError = urllib3.exceptions.HTTPError if os.name == "nt" else urllib2.URLError
-                try:
-                    return _method_obj(*args, **kwargs)
-                except (URLError, socket.error, HTTPException) as e:
-                    if restart:
-                        server.stop()
-                        server.start(timeout=30)
-                        return _JsonRPCMethod(url, method, timeout, False)(*args, **kwargs)
-                    else:
-                        raise
-                except JsonRPCError as e:
-                    if e.code >= ERROR_CODE_BASE - 1:
-                        server.stop()
-                        server.start()
-                        return _method_obj(*args, **kwargs)
-                    elif e.code == ERROR_CODE_BASE - 2 and self.handlers['on']:  # Not Found
-                        try:
-                            self.handlers['on'] = False
-                            # any handler returns True will break the left handlers
-                            any(handler(self.handlers.get('device', None)) for handler in self.handlers['handlers'])
-                        finally:
-                            self.handlers['on'] = True
-                        return _method_obj(*args, **kwargs)
-                    raise
-            return wrapper
-
-        return JsonRPCClient(self.rpc_uri,
-                             timeout=timeout,
-                             method_class=_JsonRPCMethod)
+        return jsonrpc_wrap(self, timeout=int(os.environ.get("jsonrpc_timeout", 90)))
 
     def __jsonrpc(self):
         return JsonRPCClient(self.rpc_uri, timeout=int(os.environ.get("JSONRPC_TIMEOUT", 90)))
@@ -453,10 +172,27 @@ class AutomatorServer(object):
         '''sdk version of connected device.'''
         if self.__sdk == 0:
             try:
-                self.__sdk = int(self.adb.cmd("shell", "getprop", "ro.build.version.sdk").communicate()[0].decode("utf-8").strip())
+                self.__sdk = int(self.adb_device.shell("getprop ro.build.version.sdk"))
             except:
                 pass
         return self.__sdk
+
+    def _handle_server_message(self, connection):
+        self._uiautomator_connection = connection
+        try:
+            while True:
+                if not self._stop_server:
+                    data = connection.read(length=1024)
+                    print(str(data))
+
+        except Exception as e:
+            if not self._stop_server:
+                raise e
+
+    def handle_server_message(self, connection):
+        self._message_handler_thread = threading.Thread(target=self._handle_server_message, args=(connection,), daemon=True)
+        self._message_handler_thread.start()
+
 
     def start(self, timeout=5):
         if self.sdk_version() < 18:
@@ -468,11 +204,11 @@ class AutomatorServer(object):
             ))
         else:
             self.install()
-            cmd = ["shell", "am", "instrument", "-w",
+            cmd = ["am", "instrument", "-w",
                    "com.github.uiautomator.test/android.support.test.runner.AndroidJUnitRunner"]
 
-        self.uiautomator_process = self.adb.cmd(*cmd)
-        self.adb.forward(self.local_port, self.device_port)
+        self.adb_device.shell(" ".join(cmd), handler=self.handle_server_message)
+        self.adb_device.forward("tcp:{}".format(self.local_port), "tcp:{}".format(self.device_port))
 
         while not self.alive and timeout > 0:
             time.sleep(0.1)
@@ -493,38 +229,40 @@ class AutomatorServer(object):
 
     def stop(self):
         '''Stop the rpc server.'''
-        if self.uiautomator_process and self.uiautomator_process.poll() is None:
+        if self._message_handler_thread:
+            self._stop_server = True
             res = None
+
             try:
                 res = urllib2.urlopen(self.stop_uri)
-                self.uiautomator_process.wait()
             except:
-                self.uiautomator_process.kill()
+                if self._uiautomator_connection:
+                    self._uiautomator_connection.close()
             finally:
                 if res is not None:
                     res.close()
-                self.uiautomator_process = None
+
+                self._uiautomator_connection = None
+
         try:
-            out = self.adb.cmd("shell", "ps", "-C", "uiautomator").communicate()[0].decode("utf-8").strip().splitlines()
-            if out:
-                index = out[0].split().index("PID")
-                for line in out[1:]:
-                    if len(line.split()) > index:
-                        self.adb.cmd("shell", "kill", "-9", line.split()[index]).wait()
+            pid = self.adb_device.get_pid("com.github.uiautomator")
+            if pid:
+                result = self.adb_device.shell("kill -9 {}".format(pid))
+                print(result)
         except:
             pass
 
     @property
     def stop_uri(self):
-        return "http://%s:%d/stop" % (self.adb.adb_server_host, self.local_port)
+        return "http://%s:%d/stop" % (self.adb_client.host, self.local_port)
 
     @property
     def rpc_uri(self):
-        return "http://%s:%d/jsonrpc/0" % (self.adb.adb_server_host, self.local_port)
+        return "http://%s:%d/jsonrpc/0" % (self.adb_client.host, self.local_port)
 
     @property
     def screenshot_uri(self):
-        return "http://%s:%d/screenshot/0" % (self.adb.adb_server_host, self.local_port)
+        return "http://%s:%d/screenshot/0" % (self.adb_client.host, self.local_port)
 
     def screenshot(self, filename=None, scale=1.0, quality=100):
         if self.sdk_version() >= 18:
@@ -557,7 +295,7 @@ class AutomatorDevice(object):
         "height": "displayHeight"
     }
 
-    def __init__(self, serial=None, local_port=None, adb_server_host=None, adb_server_port=None):
+    def __init__(self, serial, local_port=None, adb_server_host="127.0.0.1", adb_server_port=5037):
         self.server = AutomatorServer(
             serial=serial,
             local_port=local_port,
@@ -626,9 +364,8 @@ class AutomatorDevice(object):
                                                          scale, quality)
         if not device_file:
             return None
-        p = self.server.adb.cmd("pull", device_file, filename)
-        p.wait()
-        self.server.adb.cmd("shell", "rm", device_file).wait()
+        self.server.adb_device.pull(device_file, filename)
+        self.server.adb_device.shell("rm {}".format(device_file))
         return filename if p.returncode is 0 else None
 
     def freeze_rotation(self, freeze=True):
@@ -853,9 +590,9 @@ class AutomatorDevice(object):
             else:
                 http_timeout = int(os.environ.get("JSONRPC_TIMEOUT", 90))
             if action == "idle":
-                return self.server.jsonrpc_wrap(timeout=http_timeout).waitForIdle(timeout)
+                return jsonrpc_wrap(self.server, timeout=http_timeout).waitForIdle(timeout)
             elif action == "update":
-                return self.server.jsonrpc_wrap(timeout=http_timeout).waitForWindowUpdate(package_name, timeout)
+                return jsonrpc_wrap(self.server, timeout=http_timeout).waitForWindowUpdate(package_name, timeout)
         return _wait
 
     def exists(self, **kwargs):
@@ -1053,9 +790,10 @@ class AutomatorDeviceUiObject(object):
                 http_timeout = timeout / 1000 + 5
             else:
                 http_timeout = int(os.environ.get("JSONRPC_TIMEOUT", 90))
-            method = self.device.server.jsonrpc_wrap(
+            method = jsonrpc_wrap(
+                self.device.server,
                 timeout=http_timeout
-            ).waitUntilGone if action == "gone" else self.device.server.jsonrpc_wrap(timeout=http_timeout).waitForExists
+            ).waitUntilGone if action == "gone" else jsonrpc_wrap(self.device.server, timeout=http_timeout).waitForExists
             return method(self.selector, timeout)
         return _wait
 
@@ -1279,5 +1017,3 @@ class AutomatorDeviceObject(AutomatorDeviceUiObject):
             elif action == "to":
                 return __scroll_to(vertical, **kwargs)
         return _scroll
-
-device = AutomatorDevice()

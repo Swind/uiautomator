@@ -9,3 +9,7 @@ uiautomator.egg-info
 *.egg
 .tox
 .coverage
+.idea
+test.py
+venv
+uiautomator_ppadb.egg-info

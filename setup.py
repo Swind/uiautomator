@@ -7,7 +7,8 @@ except ImportError:
 
 
 requires = [
-    "urllib3>=1.7.1"
+    "urllib3>=1.7.1",
+    'pure-python-adb>=0.2.2.dev'
 ]
 test_requires = [
     'nose>=1.0',
@@ -15,12 +16,12 @@ test_requires = [
     'coverage>=3.6'
 ]
 
-version = '0.3.2'
+version = '0.0.1'
 
 setup(
-    name='uiautomator',
+    name='uiautomator-ppadb',
     version=version,
-    description='Python Wrapper for Android UiAutomator test tool',
+    description='Fork from uiautomator - Python Wrapper for Android UiAutomator test tool',
     long_description='Python wrapper for Android uiautomator tool.',
     author='Xiaocong He',
     author_email='xiaocong@gmail.com,hongbin.bao@gmail.com',
@@ -49,7 +50,6 @@ setup(
         'Environment :: Console',
         'Intended Audience :: Developers',
         'Operating System :: POSIX :: Linux',
-        'Programming Language :: Python :: 2.7',
         'Programming Language :: Python :: 3.2',
         'Programming Language :: Python :: 3.3',
         'Programming Language :: Python :: 3.4',

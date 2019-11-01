@@ -1,0 +1,12 @@
+version: '2'
+services:
+  emulator:
+    image: swind/android-emulator:android_26
+    ports:
+      # For noVNC
+      - "6080:6080"
+    environment:
+     - ANDROID_EMULATOR_EXTRA_ARGS=-skin 1080x1920 -memory 2048 -gpu host -no-boot-anim -qemu
+     - ANDROID_AVD_EXTRA_ARGS=--device 8 --force
+    devices:
+      - "/dev/kvm:/dev/kvm"

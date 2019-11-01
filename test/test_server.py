@@ -9,11 +9,10 @@ from uiautomator import AutomatorServer, JsonRPCError
 class TestAutomatorServer(unittest.TestCase):
 
     def setUp(self):
-        self.Adb_patch = patch('uiautomator.Adb')
-        self.Adb = self.Adb_patch.start()
+        pass
 
     def tearDown(self):
-        self.Adb.stop()
+        pass
 
     def test_local_port(self):
         self.assertEqual(AutomatorServer("1234", 9010).local_port, 9010)

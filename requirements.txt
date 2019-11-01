@@ -1,1 +1,5 @@
 tox==1.6.0
+pure-python-adb==0.2.2.dev
+nose
+mock
+coverage
