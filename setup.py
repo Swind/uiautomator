@@ -16,17 +16,17 @@ test_requires = [
     'coverage>=3.6'
 ]
 
-version = '0.0.1'
+version = '1.0.0'
 
 setup(
-    name='uiautomator-ppadb',
+    name='ppadb-uiautomator',
     version=version,
     description='Fork from uiautomator - Python Wrapper for Android UiAutomator test tool',
-    long_description='Python wrapper for Android uiautomator tool.',
+    long_description='Fork from uiautomator - Python wrapper for Android uiautomator tool and replace the adb cli by ppadb.',
     author='Xiaocong He',
     author_email='xiaocong@gmail.com,hongbin.bao@gmail.com',
-    url='https://github.com/xiaocong/uiautomator',
-    download_url='https://github.com/xiaocong/uiautomator/tarball/%s' % version,
+    url='https://github.com/swind/uiautomator',
+    download_url='https://github.com/swind/uiautomator/tarball/%s' % version,
     keywords=[
         'testing', 'android', 'uiautomator'
     ],
